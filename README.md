@@ -38,12 +38,16 @@ npx expo start --ios
 Served by the Expo dev server. Add `sport=all`, `sport=football`, `sport=basketball`, or `sport=american-football`. `all` is the default.
 
 - `GET /api/fixtures?date=YYYY-MM-DD&sport=football` — games for that day. If `date` is omitted, the server uses its local calendar day.
-- `GET /api/live?sport=basketball` — matches in progress for that sport.
+- `GET /api/live?sport=basketball` — matches in progress for that sport. Football uses the API-Sports live feed. Basketball and American football do not support that parameter, so the server requests that day's games and keeps the ones in progress.
 
-`sport=all` asks each sport's API. Each product has its own free-plan quota, so the All filter costs one cached request per sport.
+`sport=all` reads Football, Basketball, and American Football from separate caches. A poll refreshes at most one stale sport, so All does not fire three API-Sports calls at once. The other sports stay on their last cached scores. With an API key, a sport that has not been fetched yet is left out until a later poll, instead of being filled with demo games. Every upstream call counts toward the daily cap, including extra pages.
 
-Live responses are cached for 25 seconds. Fixture responses are cached for 60 seconds. The scoreboard polls the active endpoint every 30 seconds while the app is open.
+The scoreboard polls the local `/api/fixtures` or `/api/live` route every 30 seconds while the app is open. It never calls API-Sports itself.
+
+Major, College, and Minor filter the games already on screen: Major is the NBA, the NFL, and top-flight soccer (Premier League, La Liga, Serie A, Bundesliga, Ligue 1, UEFA Champions League, MLS); College is NCAA and similar; every other league, including ones LiveZone does not recognize, is Minor. Choosing a tier does not call API-Sports.
 
 ## Free-plan quota
 
-The API-Sports free plan is about 100 requests per day. Caching collapses concurrent clients into one upstream fetch per cache window, but a dev server left open all day can still spend the allowance. Stop Expo when you are finished. If the daily limit is hit and a previous response is still in memory, LiveZone serves that last slate.
+The API-Sports free plan is about 100 requests per day. LiveZone keeps live responses for 30 seconds and fixtures for 60 seconds. A later poll in that window is served from memory and does not call API-Sports. Calls already in flight for the same sport, date, and endpoint are shared, so many phones polling together make one upstream request.
+
+The server allows 80 API-Sports requests per UTC day by default. Set `API_SPORTS_DAILY_LIMIT` in `.env.local` to change that cap. When the cap is spent, or API-Sports returns HTTP 429, LiveZone does not retry. It returns the last cached scores, or the demo games if nothing is cached, with `rateLimited: true`. The scoreboard keeps showing those games and adds the note "Live data paused to protect the API quota". Stop Expo when you are finished so a dev server is not left polling.

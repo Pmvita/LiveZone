@@ -14,8 +14,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { apiUrl } from "../lib/api";
 import { SPORTS, sportLabel, type SportId } from "../lib/catalog";
 import { formatDay, formatKickoff, shiftDate, todayLocal } from "../lib/dates";
+import { matchesTier, TIERS, type TierId } from "../lib/tiers";
 import type { Game, GamesPayload, GameStatus } from "../lib/types";
 
+/** Hits the local Expo routes only. Must stay at least 30 seconds. */
 const POLL_MS = 30_000;
 
 type Mode = "today" | "live";
@@ -85,6 +87,16 @@ function textFor(status: GameStatus) {
   return styles.badgeTextFinished;
 }
 
+function emptyCopy(sport: SportId, tier: TierId, mode: Mode): string {
+  const tierName = tier === "major" ? "major-league " : tier === "college" ? "college " : tier === "minor" ? "minor-league " : "";
+  const sportName = sport === "all" ? "" : `${sportLabel(sport).toLowerCase()} `;
+  const subject = `${tierName}${sportName}`.trim();
+  if (!subject) {
+    return mode === "live" ? "No matches are live right now." : "No matches on this date.";
+  }
+  return mode === "live" ? `No ${subject} games are live right now.` : `No ${subject} games on this date.`;
+}
+
 function groupRows(games: Game[]): Row[] {
   const groups = new Map<string, Game[]>();
   for (const game of games) {
@@ -112,6 +124,7 @@ function groupRows(games: Game[]): Row[] {
 export function Scoreboard() {
   const [mode, setMode] = useState<Mode>("today");
   const [sport, setSport] = useState<SportId>("all");
+  const [tier, setTier] = useState<TierId>("all");
   const [date, setDate] = useState(todayLocal);
   const [data, setData] = useState<GamesPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -164,8 +177,9 @@ export function Scoreboard() {
     };
   }, [load]);
 
-  const rows = useMemo(() => groupRows(data?.games ?? []), [data]);
-  const liveCount = data?.games.filter((game) => game.status === "live").length ?? 0;
+  const games = useMemo(() => (data?.games ?? []).filter((game) => matchesTier(game, tier)), [data, tier]);
+  const rows = useMemo(() => groupRows(games), [games]);
+  const liveCount = games.filter((game) => game.status === "live").length;
   const today = todayLocal();
 
   return (
@@ -205,6 +219,29 @@ export function Scoreboard() {
                 accessibilityRole="button"
                 accessibilityState={{ selected }}
                 accessibilityLabel={`Show ${item.label}`}
+              >
+                <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{item.label}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.tierScroll}
+          contentContainerStyle={styles.chips}
+        >
+          {TIERS.map((item) => {
+            const selected = tier === item.id;
+            return (
+              <Pressable
+                key={item.id}
+                onPress={() => setTier(item.id)}
+                style={[styles.chip, selected && styles.chipSelected]}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                accessibilityLabel={`Show ${item.label} leagues`}
               >
                 <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{item.label}</Text>
               </Pressable>
@@ -253,7 +290,11 @@ export function Scoreboard() {
           {mode === "today" ? <Text style={styles.dateLabel}>{formatDay(date)}</Text> : null}
         </View>
 
-        {data?.source === "demo" && data.message ? <Text style={styles.banner}>{data.message}</Text> : null}
+        {data?.rateLimited ? (
+          <Text style={styles.banner}>{data.message || "Live data paused to protect the API quota"}</Text>
+        ) : data?.message && (data.source === "demo" || data.games.length === 0) ? (
+          <Text style={styles.banner}>{data.message}</Text>
+        ) : null}
         {error && data ? <Text style={styles.notice}>{error}</Text> : null}
 
         {loading && !data ? (
@@ -281,19 +322,11 @@ export function Scoreboard() {
             style={styles.list}
             contentContainerStyle={styles.listContent}
             ListEmptyComponent={
-              <Text style={styles.empty}>
-                {sport === "all"
-                  ? mode === "live"
-                    ? "No matches are live right now."
-                    : "No matches on this date."
-                  : mode === "live"
-                    ? `No ${sportLabel(sport)} games are live right now.`
-                    : `No ${sportLabel(sport)} games on this date.`}
-              </Text>
+              <Text style={styles.empty}>{emptyCopy(sport, tier, mode)}</Text>
             }
             ListFooterComponent={
               <Text style={styles.meta}>
-                {data.games.length} {data.games.length === 1 ? "match" : "matches"}
+                {games.length} {games.length === 1 ? "match" : "matches"}
                 {" · "}
                 {data.cached ? "Cached" : "Fresh"}
                 {" · "}
@@ -412,6 +445,10 @@ const styles = StyleSheet.create({
   chipScroll: {
     flexGrow: 0,
     marginTop: 14,
+  },
+  tierScroll: {
+    flexGrow: 0,
+    marginTop: 8,
   },
   chips: {
     paddingHorizontal: 16,

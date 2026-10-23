@@ -26,7 +26,29 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      ["expo-router", { "apiRoutes": true }]
-    ]
+      [
+        "expo-router",
+        {
+          "apiRoutes": true
+        }
+      ]
+    ],
+    "extra": {
+      "router": {
+        "apiRoutes": true,
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "ef81a593-28b6-48c9-8e2e-4bf3d96fee7b"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/ef81a593-28b6-48c9-8e2e-4bf3d96fee7b"
+    }
   }
 }

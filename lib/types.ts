@@ -11,6 +11,7 @@ export type Game = {
   id: number;
   sport: SportSlug;
   league: string;
+  leagueId?: number | null;
   country: string;
   kickoff: string;
   status: GameStatus;
@@ -31,4 +32,5 @@ export type GamesPayload = {
   sport: SportId;
   games: Game[];
   message?: string;
+  rateLimited?: boolean;
 };

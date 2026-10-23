@@ -1,12 +1,25 @@
 import { parseSport, SPORT_SLUGS, type SportId, type SportSlug } from "./catalog";
-import { loadCached, readStale } from "./cache";
+import {
+  acquireUpstream,
+  cacheFreshUntil,
+  canCallUpstream,
+  loadCached,
+  noteUpstreamRejection,
+  peekInflight,
+  readFresh,
+  readStale,
+  recordUpstreamCall,
+  releaseUpstream,
+  writeCache,
+} from "./cache";
 import { parseDateParam, todayLocal } from "./dates";
 import { demoGamesFor, demoPayload } from "./mock";
 import { compareGames, mapStatus, statusLabel } from "./status";
 import type { Game, GamesPayload } from "./types";
 
-export const LIVE_CACHE_MS = 25_000;
+export const LIVE_CACHE_MS = 30_000;
 export const FIXTURES_CACHE_MS = 60_000;
+export const QUOTA_MESSAGE = "Live data paused to protect the API quota";
 const MAX_PAGES = 3;
 
 const JSON_HEADERS = { "Cache-Control": "no-store" };
@@ -29,7 +42,7 @@ type ApiRecord = {
   status?: ApiStatus;
   fixture?: { id?: number; date?: string; status?: ApiStatus };
   game?: { id?: number; date?: string | { date?: string; timestamp?: number }; status?: ApiStatus };
-  league?: { name?: string; country?: string | { name?: string } };
+  league?: { id?: number; name?: string; country?: string | { name?: string } };
   country?: { name?: string };
   teams?: { home?: ApiSide; away?: ApiSide };
   goals?: { home?: number | null; away?: number | null };
@@ -118,6 +131,7 @@ function normalizeFixture(raw: unknown, sport: SportSlug): Game | null {
     id,
     sport,
     league: item.league?.name || sportLabelFallback(sport),
+    leagueId: typeof item.league?.id === "number" ? item.league.id : null,
     country: countryName(item),
     kickoff: readKickoff(item),
     status,
@@ -166,6 +180,17 @@ async function fetchPage(
     throw new SportsError("Could not reach API-Sports.");
   }
 
+  if (response.status === 429) {
+    let daily = false;
+    try {
+      daily = /day|daily|request limit/i.test(await response.text());
+    } catch {
+      daily = false;
+    }
+    noteUpstreamRejection(daily);
+    throw new SportsError(daily ? "API-Sports daily request limit reached." : "API-Sports rate limit.", 429);
+  }
+
   if (!response.ok) {
     throw new SportsError(`API-Sports returned HTTP ${response.status}.`);
   }
@@ -184,10 +209,11 @@ async function fetchPage(
   if (hasErrors(body.errors)) {
     const detail = formatErrors(body.errors);
     const limited = /request limit|rate limit|too many|quota/i.test(detail);
-    throw new SportsError(
-      limited ? "API-Sports daily request limit reached." : `API-Sports error: ${detail}`,
-      limited ? 429 : 502,
-    );
+    if (limited) {
+      noteUpstreamRejection(/day|daily|request limit/i.test(detail));
+      throw new SportsError("API-Sports daily request limit reached.", 429);
+    }
+    throw new SportsError(`API-Sports error: ${detail}`);
   }
 
   const list = Array.isArray(body.response) ? body.response : [];
@@ -197,63 +223,211 @@ async function fetchPage(
   return { games, totalPages };
 }
 
-async function fetchSportGames(sport: SportSlug, params: Record<string, string>): Promise<Game[]> {
-  const first = await fetchPage(sport, params);
-  const byId = new Map<string, Game>();
-  for (const game of first.games) byId.set(`${game.sport}:${game.id}`, game);
+async function fetchPageCounted(
+  sport: SportSlug,
+  params: Record<string, string>,
+): Promise<{ games: Game[]; totalPages: number }> {
+  if (!canCallUpstream()) {
+    throw new SportsError("API-Sports daily request limit reached.", 429);
+  }
+  recordUpstreamCall();
+  return fetchPage(sport, params);
+}
 
-  const lastPage = Math.min(first.totalPages, MAX_PAGES);
-  for (let page = 2; page <= lastPage; page += 1) {
-    const next = await fetchPage(sport, { ...params, page: String(page) });
+async function fetchSportGames(sport: SportSlug, params: Record<string, string>): Promise<Game[]> {
+  const byId = new Map<string, Game>();
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages && page <= MAX_PAGES) {
+    if (page > 1 && !canCallUpstream()) break;
+    let next: { games: Game[]; totalPages: number };
+    try {
+      next = await fetchPageCounted(sport, page === 1 ? params : { ...params, page: String(page) });
+    } catch (error) {
+      if (page > 1 && error instanceof SportsError && error.status === 429) break;
+      throw error;
+    }
     for (const game of next.games) byId.set(`${game.sport}:${game.id}`, game);
+    totalPages = next.totalPages;
+    page += 1;
   }
 
   return [...byId.values()];
 }
 
-async function fetchSelected(sport: SportId, paramsFor: (slug: SportSlug) => Record<string, string>): Promise<Game[]> {
-  const slugs = sport === "all" ? SPORT_SLUGS : [sport];
-  const settled = await Promise.all(
-    slugs.map(async (slug) => {
-      try {
-        return { slug, games: await fetchSportGames(slug, paramsFor(slug)) };
-      } catch (error) {
-        return { slug, error };
-      }
-    }),
-  );
+function cacheKey(kind: "live" | "fixtures", slug: SportSlug, date: string | null): string {
+  if (kind === "fixtures") return `fixtures:${date}:${slug}`;
+  return slug === "football" ? `live:${slug}` : `live:${slug}:date`;
+}
 
-  const games: Game[] = [];
-  const failures: unknown[] = [];
-  for (const result of settled) {
-    if ("games" in result && Array.isArray(result.games)) games.push(...result.games);
-    else if ("error" in result) failures.push(result.error);
+function liveParams(slug: SportSlug): Record<string, string> {
+  if (slug === "football") return { live: "all" };
+  return { date: todayLocal() };
+}
+
+function demoSlice(kind: "live" | "fixtures", slug: SportSlug, date: string | null): GamesPayload {
+  const day = date || todayLocal();
+  const games = demoGamesFor(day, slug).filter((game) => kind === "fixtures" || game.status === "live");
+  return demoPayload(kind === "live" ? null : day, games, slug);
+}
+
+function quotaPayload(payload: GamesPayload): GamesPayload {
+  return { ...payload, rateLimited: true, message: QUOTA_MESSAGE };
+}
+
+function emptySlice(kind: "live" | "fixtures", slug: SportSlug, date: string | null, message: string): GamesPayload {
+  return {
+    source: "api",
+    cached: false,
+    fetchedAt: new Date().toISOString(),
+    date: kind === "live" ? null : date,
+    sport: slug,
+    games: [],
+    message,
+  };
+}
+
+function savedApiSlice(key: string): GamesPayload | null {
+  const stale = readStale(key);
+  if (!stale || stale.source !== "api") return null;
+  return { ...stale, cached: true };
+}
+
+function fallbackSlice(key: string, kind: "live" | "fixtures", slug: SportSlug, date: string | null): GamesPayload {
+  return savedApiSlice(key) ?? demoSlice(kind, slug, date);
+}
+
+async function fetchSlice(
+  kind: "live" | "fixtures",
+  slug: SportSlug,
+  date: string | null,
+  params: Record<string, string>,
+): Promise<GamesPayload> {
+  const key = cacheKey(kind, slug, date);
+  try {
+    const games = await fetchSportGames(slug, params);
+    const visible = kind === "live" && !params.live ? games.filter((game) => game.status === "live") : games;
+    const payload = apiPayload(kind === "live" ? null : date, slug, visible);
+    return canCallUpstream() ? payload : quotaPayload(payload);
+  } catch (error) {
+    const limited = error instanceof SportsError && error.status === 429;
+    const saved = savedApiSlice(key);
+    if (saved) {
+      return limited ? quotaPayload(saved) : { ...saved, message: "API-Sports is unavailable. Showing the last cached scores." };
+    }
+    if (limited || !apiKey()) return quotaPayload(demoSlice(kind, slug, date));
+    const message = error instanceof SportsError ? error.message : "Could not reach API-Sports.";
+    return emptySlice(kind, slug, date, message);
   }
-  if (failures.length === slugs.length) {
-    throw failures[0] instanceof Error ? failures[0] : new SportsError("Could not reach API-Sports.");
+}
+
+async function loadOne(
+  kind: "live" | "fixtures",
+  slug: SportSlug,
+  date: string | null,
+  ttlMs: number,
+  params: Record<string, string>,
+  allowNewUpstream: boolean,
+): Promise<GamesPayload> {
+  const key = cacheKey(kind, slug, date);
+  const fresh = readFresh(key);
+  if (fresh && !(fresh.source === "demo" && apiKey())) return fresh;
+
+  const pending = peekInflight(key);
+  if (pending) return pending;
+
+  if (!apiKey()) {
+    const payload = demoSlice(kind, slug, date);
+    writeCache(key, payload, ttlMs);
+    return payload;
   }
-  return games;
+
+  if (!canCallUpstream()) return quotaPayload(fallbackSlice(key, kind, slug, date));
+
+  if (!allowNewUpstream || !acquireUpstream(key)) {
+    const saved = savedApiSlice(key);
+    if (saved) return saved;
+    if (!apiKey()) return demoSlice(kind, slug, date);
+    return emptySlice(kind, slug, date, "");
+  }
+
+  try {
+    return await loadCached(key, ttlMs, () => fetchSlice(kind, slug, date, params));
+  } finally {
+    releaseUpstream(key);
+  }
+}
+
+function combine(sport: SportId, date: string | null, parts: GamesPayload[]): GamesPayload {
+  const games = parts.flatMap((part) => part.games).sort(compareGames);
+  const rateLimited = parts.some((part) => part.rateLimited === true);
+  const source = parts.every((part) => part.source === "demo") ? "demo" : "api";
+  const cached = parts.length > 0 && parts.every((part) => part.cached);
+  const fetchedAt = parts.reduce(
+    (latest, part) => (part.fetchedAt > latest ? part.fetchedAt : latest),
+    parts[0]?.fetchedAt ?? new Date().toISOString(),
+  );
+  const message = rateLimited
+    ? QUOTA_MESSAGE
+    : source === "demo"
+      ? parts.find((part) => part.message)?.message
+      : games.length === 0
+        ? parts.find((part) => part.message)?.message
+        : undefined;
+  return {
+    source,
+    cached,
+    fetchedAt,
+    date,
+    sport,
+    games,
+    ...(rateLimited ? { rateLimited: true } : {}),
+    ...(message ? { message } : {}),
+  };
+}
+
+async function loadSelection(
+  kind: "live" | "fixtures",
+  sport: SportId,
+  date: string | null,
+  ttlMs: number,
+  paramsFor: (slug: SportSlug) => Record<string, string>,
+): Promise<GamesPayload> {
+  const slugs = (sport === "all" ? [...SPORT_SLUGS] : [sport])
+    .map((slug, index) => ({
+      slug,
+      index,
+      freshUntil: cacheFreshUntil(cacheKey(kind, slug, date)),
+    }))
+    .sort((a, b) => a.freshUntil - b.freshUntil || a.index - b.index)
+    .map((item) => item.slug);
+  let upstreamClaimed = false;
+  const parts: GamesPayload[] = [];
+
+  for (const slug of slugs) {
+    const key = cacheKey(kind, slug, date);
+    const fresh = readFresh(key);
+    const pending = fresh ? null : peekInflight(key);
+    const canStart = !fresh && !pending && Boolean(apiKey()) && canCallUpstream() && !upstreamClaimed;
+    if (canStart || pending) upstreamClaimed = true;
+    parts.push(await loadOne(kind, slug, date, ttlMs, paramsFor(slug), canStart));
+  }
+
+  return combine(sport, kind === "live" ? null : date, parts);
 }
 
 export async function getFixtures(date: string, sport: SportId): Promise<GamesPayload> {
-  return loadCached(`fixtures:${date}:${sport}`, FIXTURES_CACHE_MS, async () => {
-    if (!apiKey()) return demoPayload(date, demoGamesFor(date, sport), sport);
-    return apiPayload(date, sport, await fetchSelected(sport, () => ({ date })));
-  });
+  if (sport !== "all") return loadSelection("fixtures", sport, date, FIXTURES_CACHE_MS, () => ({ date }));
+  return loadCached(`v2:fixtures:${date}:all`, FIXTURES_CACHE_MS, () =>
+    loadSelection("fixtures", sport, date, FIXTURES_CACHE_MS, () => ({ date })),
+  );
 }
 
 export async function getLive(sport: SportId): Promise<GamesPayload> {
-  return loadCached(`live:${sport}`, LIVE_CACHE_MS, async () => {
-    if (!apiKey()) {
-      const date = todayLocal();
-      return demoPayload(
-        null,
-        demoGamesFor(date, sport).filter((game) => game.status === "live"),
-        sport,
-      );
-    }
-    return apiPayload(null, sport, await fetchSelected(sport, () => ({ live: "all" })));
-  });
+  if (sport !== "all") return loadSelection("live", sport, null, LIVE_CACHE_MS, liveParams);
+  // v3 drops an older combined entry that mixed demo games into live scores.
+  return loadCached("v3:live:all", LIVE_CACHE_MS, () => loadSelection("live", sport, null, LIVE_CACHE_MS, liveParams));
 }
 
 export function resolveDate(value: string | null): string | { error: string } {
@@ -264,17 +438,37 @@ export function resolveSport(value: string | null): SportId | { error: string } 
   return parseSport(value);
 }
 
+function relatedKeys(cacheKey: string): string[] {
+  if (cacheKey === "live:all") return SPORT_SLUGS.map((slug) => `live:${slug}`);
+  if (cacheKey.startsWith("fixtures:") && cacheKey.endsWith(":all")) {
+    const date = cacheKey.slice("fixtures:".length, -":all".length);
+    return SPORT_SLUGS.map((slug) => `fixtures:${date}:${slug}`);
+  }
+  return [cacheKey];
+}
+
 export function failureResponse(cacheKey: string, error: unknown): Response {
-  const stale = readStale(cacheKey);
-  if (stale) {
-    return Response.json(
-      {
-        ...stale,
-        cached: true,
-        message: "API-Sports is unavailable. Showing the last cached scores.",
-      },
-      { headers: JSON_HEADERS },
+  const limited = error instanceof SportsError && error.status === 429;
+  const staleParts = relatedKeys(cacheKey)
+    .map((key) => readStale(key))
+    .filter((payload): payload is GamesPayload => payload !== null);
+
+  if (staleParts.length > 0) {
+    const sport = cacheKey.endsWith(":all") ? "all" : staleParts[0].sport;
+    const date = staleParts.find((part) => part.date)?.date ?? null;
+    const body = combine(sport, date, staleParts);
+    return jsonResponse(
+      limited
+        ? quotaPayload(body)
+        : { ...body, message: "API-Sports is unavailable. Showing the last cached scores." },
     );
+  }
+
+  if (limited) {
+    const sport = cacheKey.endsWith(":all") ? "all" : parseSport(cacheKey.split(":").at(-1) ?? null);
+    const slug = typeof sport === "string" ? sport : "all";
+    const date = cacheKey.startsWith("fixtures:") ? cacheKey.split(":")[1] : null;
+    return jsonResponse(quotaPayload(demoPayload(date, demoGamesFor(date || todayLocal(), slug), slug)));
   }
 
   const status = error instanceof SportsError ? error.status : 502;
