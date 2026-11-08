@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
 import { apiUrl } from "../lib/api";
 import { SPORTS, sportLabel, type SportId } from "../lib/catalog";
 import { formatDay, formatKickoff, shiftDate, todayLocal } from "../lib/dates";
@@ -122,11 +123,22 @@ function groupRows(games: Game[]): Row[] {
 }
 
 export function Scoreboard() {
+  const router = useRouter();
   const [mode, setMode] = useState<Mode>("today");
   const [sport, setSport] = useState<SportId>("all");
   const [tier, setTier] = useState<TierId>("all");
   const [date, setDate] = useState(todayLocal);
-  const [data, setData] = useState<GamesPayload | null>(null);
+  const [data, setData] = useState<GamesPayload | null>(() => {
+    if (typeof localStorage !== "undefined") {
+      try {
+        const raw = localStorage.getItem("livezone:last");
+        return raw ? (JSON.parse(raw) as GamesPayload) : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const requestId = useRef(0);
@@ -154,6 +166,13 @@ export function Scoreboard() {
         setData(body);
         setError(null);
         setLoading(false);
+        if (typeof localStorage !== "undefined") {
+          try {
+            localStorage.setItem("livezone:last", JSON.stringify(body));
+          } catch {
+            // ignore
+          }
+        }
       } catch {
         if (id !== requestId.current) return;
         setError("Network error. Check that Expo is running.");
@@ -192,11 +211,23 @@ export function Scoreboard() {
               <Text style={styles.brand}>LIVE</Text>
               <Text style={[styles.brand, styles.brandAccent]}>ZONE</Text>
             </View>
+            <View style={styles.navRow}>
+              <Pressable onPress={() => router.push("/favorites")}>
+                <Text style={styles.navLink}>Favorites</Text>
+              </Pressable>
+              <Pressable onPress={() => router.push("/settings")}>
+                <Text style={styles.navLink}>Settings</Text>
+              </Pressable>
+            </View>
           </View>
           {liveCount > 0 ? (
             <View style={styles.liveCount}>
               <View style={styles.dotOnDark} />
               <Text style={styles.liveCountText}>{liveCount} LIVE</Text>
+            </View>
+          ) : data?.source === "demo" ? (
+            <View style={styles.demoBadge}>
+              <Text style={styles.demoBadgeText}>DEMO</Text>
             </View>
           ) : (
             <Text style={styles.eyebrow}>{mode === "live" ? "In progress" : formatDay(date)}</Text>
@@ -395,11 +426,34 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 6,
   },
+  demoBadge: {
+    backgroundColor: "#e6b35a",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginBottom: 6,
+  },
+  demoBadgeText: {
+    color: "#12180a",
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+  },
   liveCountText: {
     color: "#d6ff3f",
     fontSize: 13,
     fontWeight: "800",
     letterSpacing: 1.2,
+  },
+  navRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 6,
+  },
+  navLink: {
+    color: "#9eb7c8",
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 0.6,
   },
   toolbar: {
     paddingHorizontal: 16,

@@ -53,6 +53,10 @@ function apiKey(): string {
   return process.env.API_SPORTS_KEY?.trim() ?? "";
 }
 
+function strictMode(): boolean {
+  return process.env.API_SPORTS_STRICT?.trim() === "1" || process.env.LIVEZONE_FAIL_HARD?.trim() === "1";
+}
+
 const ENDPOINTS: Record<SportSlug, { base: string; resource: string }> = {
   football: { base: "https://v3.football.api-sports.io", resource: "fixtures" },
   basketball: { base: "https://v1.basketball.api-sports.io", resource: "games" },
@@ -114,7 +118,7 @@ function readTotal(value: number | ApiSide | null | undefined): number | null {
   return null;
 }
 
-function normalizeFixture(raw: unknown, sport: SportSlug): Game | null {
+export function normalizeFixture(raw: unknown, sport: SportSlug): Game | null {
   if (!raw || typeof raw !== "object") return null;
   const item = raw as ApiRecord;
   const id = item.fixture?.id ?? item.game?.id ?? item.id;
@@ -316,7 +320,12 @@ async function fetchSlice(
     if (saved) {
       return limited ? quotaPayload(saved) : { ...saved, message: "API-Sports is unavailable. Showing the last cached scores." };
     }
-    if (limited || !apiKey()) return quotaPayload(demoSlice(kind, slug, date));
+    if (!apiKey()) return quotaPayload(demoSlice(kind, slug, date));
+    if (limited) return quotaPayload(demoSlice(kind, slug, date));
+    if (strictMode()) {
+      const message = error instanceof SportsError ? error.message : "Could not reach API-Sports.";
+      return emptySlice(kind, slug, date, message);
+    }
     const message = error instanceof SportsError ? error.message : "Could not reach API-Sports.";
     return emptySlice(kind, slug, date, message);
   }
@@ -349,6 +358,7 @@ async function loadOne(
     const saved = savedApiSlice(key);
     if (saved) return saved;
     if (!apiKey()) return demoSlice(kind, slug, date);
+    if (strictMode()) return emptySlice(kind, slug, date, "");
     return emptySlice(kind, slug, date, "");
   }
 
