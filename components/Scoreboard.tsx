@@ -356,10 +356,15 @@ export function Scoreboard() {
       <View style={styles.column}>
         <View style={styles.top}>
           <View>
-            <Text style={styles.eyebrow}>Live scores</Text>
-            <View style={styles.brandRow}>
-              <Text style={styles.brand}>LIVE</Text>
-              <Text style={[styles.brand, styles.brandAccent]}>ZONE</Text>
+            <View style={styles.brandLockup}>
+              <Image source={require("../assets/livezone-mark.jpg")} style={styles.brandMark} />
+              <View>
+                <Text style={styles.eyebrow}>Live scores</Text>
+                <View style={styles.brandRow}>
+                  <Text style={styles.brand}>LIVE</Text>
+                  <Text style={[styles.brand, styles.brandAccent]}>ZONE</Text>
+                </View>
+              </View>
             </View>
             <View style={styles.navRow}>
               <Pressable onPress={() => router.push("/favorites")} style={styles.navHit}>
@@ -556,6 +561,18 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     textTransform: "uppercase",
     marginBottom: 4,
+  },
+  brandLockup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  brandMark: {
+    width: 52,
+    height: 52,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: colors.panelBorderStrong,
   },
   brandRow: {
     flexDirection: "row",

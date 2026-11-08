@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Animated, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Stack, useFocusEffect } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { SPORTS, type SportId } from "../lib/catalog";
 import { DEFAULT_PREFERENCES, loadPreferences, updatePreferences, type Preferences } from "../lib/preferences";
 import { TIERS, type TierId } from "../lib/tiers";
 import { colors, fonts } from "../lib/theme";
+
+const brandMark = require("../assets/livezone-mark.jpg");
 
 function SettingChip({
   label,
@@ -75,10 +77,15 @@ export default function SettingsScreen() {
       />
       <ScrollView contentContainerStyle={styles.body}>
         <View style={styles.header}>
-          <Text style={styles.eyebrow}>Preferences</Text>
-          <View style={styles.brandRow}>
-            <Text style={styles.brand}>LIVE</Text>
-            <Text style={[styles.brand, styles.brandAccent]}>ZONE</Text>
+          <View style={styles.brandLockup}>
+            <Image source={brandMark} style={styles.brandMark} />
+            <View>
+              <Text style={styles.eyebrow}>Preferences</Text>
+              <View style={styles.brandRow}>
+                <Text style={styles.brand}>LIVE</Text>
+                <Text style={[styles.brand, styles.brandAccent]}>ZONE</Text>
+              </View>
+            </View>
           </View>
           <Text style={styles.title}>Settings</Text>
           <Text style={styles.copy}>
@@ -145,6 +152,14 @@ const styles = StyleSheet.create({
     fontSize: 11,
     letterSpacing: 2,
     textTransform: "uppercase",
+  },
+  brandLockup: { flexDirection: "row", alignItems: "center", gap: 12 },
+  brandMark: {
+    width: 48,
+    height: 48,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: colors.panelBorderStrong,
   },
   brandRow: { flexDirection: "row" },
   brand: {

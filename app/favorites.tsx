@@ -15,6 +15,8 @@ import {
 } from "../lib/favorites";
 import { colors, fonts } from "../lib/theme";
 
+const brandMark = require("../assets/livezone-mark.jpg");
+
 type Row =
   | { key: string; kind: "section"; title: string; count: number }
   | { key: string; kind: "game"; game: FavoriteGame }
@@ -98,10 +100,15 @@ export default function FavoritesScreen() {
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View style={styles.header}>
-            <Text style={styles.eyebrow}>Saved locally</Text>
-            <View style={styles.brandRow}>
-              <Text style={styles.brand}>LIVE</Text>
-              <Text style={[styles.brand, styles.brandAccent]}>ZONE</Text>
+            <View style={styles.brandLockup}>
+              <Image source={brandMark} style={styles.brandMark} />
+              <View>
+                <Text style={styles.eyebrow}>Saved locally</Text>
+                <View style={styles.brandRow}>
+                  <Text style={styles.brand}>LIVE</Text>
+                  <Text style={[styles.brand, styles.brandAccent]}>ZONE</Text>
+                </View>
+              </View>
             </View>
             <Text style={styles.title}>Favorites</Text>
             <Text style={styles.copy}>Starred matches and clubs stay on this device. Clear any item with Remove.</Text>
@@ -198,6 +205,14 @@ const styles = StyleSheet.create({
     fontSize: 11,
     letterSpacing: 2,
     textTransform: "uppercase",
+  },
+  brandLockup: { flexDirection: "row", alignItems: "center", gap: 12 },
+  brandMark: {
+    width: 48,
+    height: 48,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: colors.panelBorderStrong,
   },
   brandRow: { flexDirection: "row" },
   brand: {
