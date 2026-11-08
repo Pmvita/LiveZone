@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { leagueTier, matchesTier } from "../lib/tiers";
-import { parseDateParam, shiftDate, todayLocal } from "../lib/dates";
+import { parseDateParam, shiftDate } from "../lib/dates";
 import { parseSport } from "../lib/catalog";
 import { normalizeFixture } from "../lib/sports";
 import { readFresh, writeCache, readStale } from "../lib/cache";
+import { gameFavoriteKey, teamFavoriteKey, teamFromSide } from "../lib/favorites";
+import { DEFAULT_PREFERENCES } from "../lib/preferences";
 
 describe("tiers", () => {
   it("NBA major", () => {
@@ -61,5 +63,23 @@ describe("cache TTL", () => {
     // overwrite with 0 ttl by direct? use writeCache then manipulate time impossible; just ensure readStale works
     const s = readStale("k1");
     expect(s).not.toBeNull();
+  });
+});
+
+describe("favorites helpers", () => {
+  it("gameFavoriteKey", () => {
+    expect(gameFavoriteKey({ sport: "football", id: 42 })).toBe("football:42");
+  });
+  it("teamFavoriteKey + teamFromSide", () => {
+    expect(teamFavoriteKey("basketball", " Boston Celtics ")).toBe("basketball:boston celtics");
+    const team = teamFromSide("basketball", { name: "Boston Celtics", logo: null });
+    expect(team.id).toBe("basketball:boston celtics");
+    expect(team.sport).toBe("basketball");
+  });
+});
+
+describe("preferences defaults", () => {
+  it("defaults to all/all", () => {
+    expect(DEFAULT_PREFERENCES).toEqual({ preferredSport: "all", preferredTier: "all" });
   });
 });

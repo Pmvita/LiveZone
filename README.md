@@ -2,7 +2,7 @@
 
 Mobile sports scores, built with Expo and React Native. Open the Expo web preview at http://localhost:8081. The same app runs in Expo Go on a phone.
 
-**Live:** https://livezone.vercel.app
+**Live:** https://livezone-phi.vercel.app
 
 The scoreboard calls Expo route handlers on that same origin (`/api/fixtures` and `/api/live`). Those handlers call [API-Sports](https://api-sports.io/) (API-Football), cache the result, and share one upstream fetch across clients. The API key is never shipped in the client bundle.
 

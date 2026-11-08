@@ -1,5 +1,15 @@
 {
-  "buildCommand": "npx expo export --platform web",
-  "outputDirectory": "dist",
-  "framework": "expo"
+  "buildCommand": "npx expo export -p web",
+  "outputDirectory": "dist/client",
+  "functions": {
+    "api/index.ts": {
+      "includeFiles": "dist/server/**"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index"
+    }
+  ]
 }
