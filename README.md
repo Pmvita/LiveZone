@@ -4,6 +4,18 @@ Mobile sports scores, built with Expo and React Native. Open the Expo web previe
 
 The scoreboard calls Expo route handlers on that same dev server (`/api/fixtures` and `/api/live`). Those handlers call [API-Sports](https://api-sports.io/) (API-Football), cache the result, and share one upstream fetch across clients. The API key is never shipped in the client bundle.
 
+## Deploy to Vercel (no dev server)
+
+1. Import the repo in Vercel (framework preset: Expo).
+2. Set server-side environment variables (do NOT prefix with `EXPO_PUBLIC_`):
+   - `API_SPORTS_KEY` (required for live data)
+   - `API_SPORTS_BASE_URL` (optional, football host override)
+   - `API_SPORTS_DAILY_LIMIT` (optional, default 80)
+   - `API_SPORTS_STRICT` (optional, set `1` for failing-hard mode)
+3. Build command: `npx expo export --platform web` (output: `dist`).
+
+The client calls relative `/api/*` routes on the same origin, so no URL config is needed.
+
 ## Run
 
 From this folder:
