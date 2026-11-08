@@ -2,17 +2,40 @@
 
 Mobile sports scores, built with Expo and React Native. Open the Expo web preview at http://localhost:8081. The same app runs in Expo Go on a phone.
 
-The scoreboard calls Expo route handlers on that same dev server (`/api/fixtures` and `/api/live`). Those handlers call [API-Sports](https://api-sports.io/) (API-Football), cache the result, and share one upstream fetch across clients. The API key is never shipped in the client bundle.
+**Live:** https://livezone.vercel.app
+
+The scoreboard calls Expo route handlers on that same origin (`/api/fixtures` and `/api/live`). Those handlers call [API-Sports](https://api-sports.io/) (API-Football), cache the result, and share one upstream fetch across clients. The API key is never shipped in the client bundle.
+
+Favorites (games + teams) and preferred sport/tier settings are stored locally with AsyncStorage. Star a match or team on the scoreboard; open **Favorites** / **Settings** from the header.
+
+## Design system
+
+Night-stadium navy base with electric lime accents. Energy cues from ESPN red/gold (`#FF2E4D` siren, `#F5B50C` gold) without purple glow. Tokens live in `lib/theme.ts`.
+
+| Token | Hex | Role |
+| --- | --- | --- |
+| `--night` | `#07111F` | Screen background |
+| `--pitch` | `#0D2137` | Controls / chip base |
+| `--panel` | `#12283F` | Match cards / panels |
+| `--lime` | `#B8F542` | LIVE accents, selected chips, brand ZONE |
+| `--siren` | `#FF2E4D` | Errors / remove actions |
+| `--gold` | `#F5B50C` | Demo badge, favorite stars, favorites accent |
+| `--mist` | `#9BB0C7` | Secondary labels |
+| `--paper` | `#E8F0FA` | Primary text |
+
+**Typography:** Oswald (condensed scores + LIVEZONE wordmark) and Figtree (UI labels) via `@expo-google-fonts/*`, loaded in `app/_layout.tsx`.
+
+**Motion (Animated API):** LIVE badge pulse, favorite star scale-on-press, filter chip selection spring. Favorites/settings brand LiveZone at the top with denser match cards and lime selected chips.
 
 ## Deploy to Vercel (no dev server)
 
-1. Import the repo in Vercel (framework preset: Expo).
+1. Import the repo in Vercel (or use the linked `livezone` project).
 2. Set server-side environment variables (do NOT prefix with `EXPO_PUBLIC_`):
    - `API_SPORTS_KEY` (required for live data)
    - `API_SPORTS_BASE_URL` (optional, football host override)
    - `API_SPORTS_DAILY_LIMIT` (optional, default 80)
-   - `API_SPORTS_STRICT` (optional, set `1` for failing-hard mode)
-3. Build command: `npx expo export --platform web` (output: `dist`).
+   - `API_SPORTS_STRICT` (optional, set `1` to fail hard instead of demo fallback; alias `LIVEZONE_FAIL_HARD=1`)
+3. Build uses `npx expo export -p web` → static client in `dist/client`, API routes in `dist/server`, served via `api/index.ts` (`expo-server` Vercel adapter). See `vercel.json`.
 
 The client calls relative `/api/*` routes on the same origin, so no URL config is needed.
 

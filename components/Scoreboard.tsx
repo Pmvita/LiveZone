@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   AppState,
   FlatList,
   Image,
@@ -15,7 +16,18 @@ import { useRouter } from "expo-router";
 import { apiUrl } from "../lib/api";
 import { SPORTS, sportLabel, type SportId } from "../lib/catalog";
 import { formatDay, formatKickoff, shiftDate, todayLocal } from "../lib/dates";
+import {
+  gameFavoriteKey,
+  loadFavoriteGames,
+  loadFavoriteTeams,
+  teamFavoriteKey,
+  teamFromSide,
+  toggleFavoriteGame,
+  toggleFavoriteTeam,
+} from "../lib/favorites";
+import { loadPreferences } from "../lib/preferences";
 import { matchesTier, TIERS, type TierId } from "../lib/tiers";
+import { colors, fonts } from "../lib/theme";
 import type { Game, GamesPayload, GameStatus } from "../lib/types";
 
 /** Hits the local Expo routes only. Must stay at least 30 seconds. */
@@ -34,6 +46,93 @@ function initials(name: string): string {
   return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 }
 
+function LivePulse({ dark }: { dark?: boolean }) {
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.35, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.dot,
+        dark ? styles.dotOnLime : styles.dotOnDark,
+        { opacity: pulse, transform: [{ scale: pulse.interpolate({ inputRange: [0.35, 1], outputRange: [0.75, 1] }) }] },
+      ]}
+    />
+  );
+}
+
+function StarButton({
+  starred,
+  onPress,
+  label,
+}: {
+  starred: boolean;
+  onPress: () => void;
+  label: string;
+}) {
+  const scale = useRef(new Animated.Value(1)).current;
+
+  const handlePress = () => {
+    Animated.sequence([
+      Animated.spring(scale, { toValue: 1.35, friction: 4, tension: 220, useNativeDriver: true }),
+      Animated.spring(scale, { toValue: 1, friction: 5, tension: 160, useNativeDriver: true }),
+    ]).start();
+    onPress();
+  };
+
+  return (
+    <Pressable onPress={handlePress} hitSlop={8} accessibilityRole="button" accessibilityLabel={label} style={styles.starHit}>
+      <Animated.Text style={[styles.starGlyph, starred && styles.starGlyphOn, { transform: [{ scale }] }]}>
+        {starred ? "★" : "☆"}
+      </Animated.Text>
+    </Pressable>
+  );
+}
+
+function FilterChip({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const scale = useRef(new Animated.Value(selected ? 1 : 0.96)).current;
+
+  useEffect(() => {
+    Animated.spring(scale, {
+      toValue: selected ? 1 : 0.96,
+      friction: 6,
+      tension: 180,
+      useNativeDriver: true,
+    }).start();
+  }, [selected, scale]);
+
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      accessibilityLabel={`Show ${label}`}
+    >
+      <Animated.View style={[styles.chip, selected && styles.chipSelected, { transform: [{ scale }] }]}>
+        <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{label}</Text>
+      </Animated.View>
+    </Pressable>
+  );
+}
+
 function TeamMark({ name, logo }: { name: string; logo: string | null }) {
   const [failed, setFailed] = useState(false);
   if (logo && !failed) {
@@ -46,30 +145,68 @@ function TeamMark({ name, logo }: { name: string; logo: string | null }) {
   );
 }
 
-function TeamRow({ team, score }: { team: Game["home"]; score: number | null }) {
+function TeamRow({
+  team,
+  score,
+  starred,
+  onToggleTeam,
+}: {
+  team: Game["home"];
+  score: number | null;
+  starred: boolean;
+  onToggleTeam: () => void;
+}) {
   return (
     <View style={styles.teamRow}>
       <TeamMark name={team.name} logo={team.logo} />
       <Text style={styles.teamName} numberOfLines={1}>
         {team.name}
       </Text>
+      <StarButton
+        starred={starred}
+        onPress={onToggleTeam}
+        label={starred ? `Unstar ${team.name}` : `Star ${team.name}`}
+      />
       <Text style={[styles.score, score == null && styles.scorePending]}>{score == null ? "–" : String(score)}</Text>
     </View>
   );
 }
 
-function MatchCard({ game }: { game: Game }) {
+function MatchCard({
+  game,
+  gameStarred,
+  homeStarred,
+  awayStarred,
+  onToggleGame,
+  onToggleHome,
+  onToggleAway,
+}: {
+  game: Game;
+  gameStarred: boolean;
+  homeStarred: boolean;
+  awayStarred: boolean;
+  onToggleGame: () => void;
+  onToggleHome: () => void;
+  onToggleAway: () => void;
+}) {
   return (
     <View style={[styles.match, borderFor(game.status)]}>
       <View style={styles.matchTop}>
         <View style={[styles.badge, game.status === "live" && styles.badgeLive]}>
-          {game.status === "live" ? <View style={styles.dot} /> : null}
+          {game.status === "live" ? <LivePulse dark /> : null}
           <Text style={[styles.badgeText, textFor(game.status)]}>{game.statusLabel}</Text>
         </View>
-        <Text style={styles.kickoff}>{formatKickoff(game.kickoff)}</Text>
+        <View style={styles.matchTopRight}>
+          <Text style={styles.kickoff}>{formatKickoff(game.kickoff)}</Text>
+          <StarButton
+            starred={gameStarred}
+            onPress={onToggleGame}
+            label={gameStarred ? "Unstar match" : "Star match"}
+          />
+        </View>
       </View>
-      <TeamRow team={game.home} score={game.homeScore} />
-      <TeamRow team={game.away} score={game.awayScore} />
+      <TeamRow team={game.home} score={game.homeScore} starred={homeStarred} onToggleTeam={onToggleHome} />
+      <TeamRow team={game.away} score={game.awayScore} starred={awayStarred} onToggleTeam={onToggleAway} />
     </View>
   );
 }
@@ -128,6 +265,8 @@ export function Scoreboard() {
   const [sport, setSport] = useState<SportId>("all");
   const [tier, setTier] = useState<TierId>("all");
   const [date, setDate] = useState(todayLocal);
+  const [favoriteGameKeys, setFavoriteGameKeys] = useState<Set<string>>(() => new Set());
+  const [favoriteTeamKeys, setFavoriteTeamKeys] = useState<Set<string>>(() => new Set());
   const [data, setData] = useState<GamesPayload | null>(() => {
     if (typeof localStorage !== "undefined") {
       try {
@@ -142,6 +281,17 @@ export function Scoreboard() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const requestId = useRef(0);
+
+  useEffect(() => {
+    void loadPreferences().then((prefs) => {
+      setSport(prefs.preferredSport);
+      setTier(prefs.preferredTier);
+    });
+    void Promise.all([loadFavoriteGames(), loadFavoriteTeams()]).then(([games, teams]) => {
+      setFavoriteGameKeys(new Set(games.map(gameFavoriteKey)));
+      setFavoriteTeamKeys(new Set(teams.map((team) => team.id)));
+    });
+  }, []);
 
   const load = useCallback(
     async (silent = false) => {
@@ -212,17 +362,17 @@ export function Scoreboard() {
               <Text style={[styles.brand, styles.brandAccent]}>ZONE</Text>
             </View>
             <View style={styles.navRow}>
-              <Pressable onPress={() => router.push("/favorites")}>
+              <Pressable onPress={() => router.push("/favorites")} style={styles.navHit}>
                 <Text style={styles.navLink}>Favorites</Text>
               </Pressable>
-              <Pressable onPress={() => router.push("/settings")}>
+              <Pressable onPress={() => router.push("/settings")} style={styles.navHit}>
                 <Text style={styles.navLink}>Settings</Text>
               </Pressable>
             </View>
           </View>
           {liveCount > 0 ? (
             <View style={styles.liveCount}>
-              <View style={styles.dotOnDark} />
+              <LivePulse />
               <Text style={styles.liveCountText}>{liveCount} LIVE</Text>
             </View>
           ) : data?.source === "demo" ? (
@@ -240,21 +390,9 @@ export function Scoreboard() {
           style={styles.chipScroll}
           contentContainerStyle={styles.chips}
         >
-          {SPORTS.map((item) => {
-            const selected = sport === item.id;
-            return (
-              <Pressable
-                key={item.id}
-                onPress={() => setSport(item.id)}
-                style={[styles.chip, selected && styles.chipSelected]}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                accessibilityLabel={`Show ${item.label}`}
-              >
-                <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{item.label}</Text>
-              </Pressable>
-            );
-          })}
+          {SPORTS.map((item) => (
+            <FilterChip key={item.id} label={item.label} selected={sport === item.id} onPress={() => setSport(item.id)} />
+          ))}
         </ScrollView>
 
         <ScrollView
@@ -263,21 +401,14 @@ export function Scoreboard() {
           style={styles.tierScroll}
           contentContainerStyle={styles.chips}
         >
-          {TIERS.map((item) => {
-            const selected = tier === item.id;
-            return (
-              <Pressable
-                key={item.id}
-                onPress={() => setTier(item.id)}
-                style={[styles.chip, selected && styles.chipSelected]}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                accessibilityLabel={`Show ${item.label} leagues`}
-              >
-                <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{item.label}</Text>
-              </Pressable>
-            );
-          })}
+          {TIERS.map((item) => (
+            <FilterChip
+              key={item.id}
+              label={item.label}
+              selected={tier === item.id}
+              onPress={() => setTier(item.id)}
+            />
+          ))}
         </ScrollView>
 
         <View style={styles.toolbar}>
@@ -330,7 +461,7 @@ export function Scoreboard() {
 
         {loading && !data ? (
           <View style={styles.loadingBox} accessibilityRole="progressbar">
-            <ActivityIndicator color="#d6ff3f" />
+            <ActivityIndicator color={colors.lime} />
             <View style={styles.skeleton} />
             <View style={styles.skeleton} />
             <View style={styles.skeleton} />
@@ -352,9 +483,7 @@ export function Scoreboard() {
             keyExtractor={(item) => item.key}
             style={styles.list}
             contentContainerStyle={styles.listContent}
-            ListEmptyComponent={
-              <Text style={styles.empty}>{emptyCopy(sport, tier, mode)}</Text>
-            }
+            ListEmptyComponent={<Text style={styles.empty}>{emptyCopy(sport, tier, mode)}</Text>}
             ListFooterComponent={
               <Text style={styles.meta}>
                 {games.length} {games.length === 1 ? "match" : "matches"}
@@ -369,7 +498,27 @@ export function Scoreboard() {
               item.kind === "header" ? (
                 <Text style={styles.league}>{item.title}</Text>
               ) : (
-                <MatchCard game={item.game} />
+                <MatchCard
+                  game={item.game}
+                  gameStarred={favoriteGameKeys.has(gameFavoriteKey(item.game))}
+                  homeStarred={favoriteTeamKeys.has(teamFavoriteKey(item.game.sport, item.game.home.name))}
+                  awayStarred={favoriteTeamKeys.has(teamFavoriteKey(item.game.sport, item.game.away.name))}
+                  onToggleGame={() => {
+                    void toggleFavoriteGame(item.game).then(({ games: next }) => {
+                      setFavoriteGameKeys(new Set(next.map(gameFavoriteKey)));
+                    });
+                  }}
+                  onToggleHome={() => {
+                    void toggleFavoriteTeam(teamFromSide(item.game.sport, item.game.home)).then(({ teams }) => {
+                      setFavoriteTeamKeys(new Set(teams.map((team) => team.id)));
+                    });
+                  }}
+                  onToggleAway={() => {
+                    void toggleFavoriteTeam(teamFromSide(item.game.sport, item.game.away)).then(({ teams }) => {
+                      setFavoriteTeamKeys(new Set(teams.map((team) => team.id)));
+                    });
+                  }}
+                />
               )
             }
           />
@@ -382,7 +531,7 @@ export function Scoreboard() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#080a09",
+    backgroundColor: colors.night,
   },
   column: {
     flex: 1,
@@ -395,15 +544,16 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "flex-end",
     borderTopWidth: 3,
-    borderTopColor: "#d6ff3f",
+    borderTopColor: colors.lime,
     marginHorizontal: 16,
     marginTop: 8,
     paddingTop: 12,
   },
   eyebrow: {
-    color: "#8d988f",
-    fontSize: 12,
-    letterSpacing: 1.6,
+    color: colors.mist,
+    fontFamily: fonts.uiBold,
+    fontSize: 11,
+    letterSpacing: 2,
     textTransform: "uppercase",
     marginBottom: 4,
   },
@@ -411,48 +561,57 @@ const styles = StyleSheet.create({
     flexDirection: "row",
   },
   brand: {
-    color: "#f3f6f1",
-    fontSize: 40,
-    fontWeight: "800",
-    letterSpacing: 1,
-    lineHeight: 42,
+    color: colors.paper,
+    fontFamily: fonts.brand,
+    fontSize: 42,
+    letterSpacing: 1.5,
+    lineHeight: 44,
   },
   brandAccent: {
-    color: "#d6ff3f",
+    color: colors.lime,
   },
   liveCount: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
     marginBottom: 6,
+    backgroundColor: colors.limeWash,
+    borderWidth: 1,
+    borderColor: colors.limeEdge,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
   demoBadge: {
-    backgroundColor: "#e6b35a",
+    backgroundColor: colors.gold,
     paddingHorizontal: 8,
     paddingVertical: 4,
     marginBottom: 6,
   },
   demoBadgeText: {
-    color: "#12180a",
+    color: colors.ink,
+    fontFamily: fonts.uiExtra,
     fontSize: 12,
-    fontWeight: "800",
     letterSpacing: 1.2,
   },
   liveCountText: {
-    color: "#d6ff3f",
+    color: colors.lime,
+    fontFamily: fonts.scoreBold,
     fontSize: 13,
-    fontWeight: "800",
-    letterSpacing: 1.2,
+    letterSpacing: 1.4,
   },
   navRow: {
     flexDirection: "row",
-    gap: 12,
-    marginTop: 6,
+    gap: 8,
+    marginTop: 8,
+  },
+  navHit: {
+    paddingVertical: 4,
+    paddingHorizontal: 2,
   },
   navLink: {
-    color: "#9eb7c8",
+    color: colors.mist,
+    fontFamily: fonts.uiBold,
     fontSize: 13,
-    fontWeight: "700",
     letterSpacing: 0.6,
   },
   toolbar: {
@@ -473,26 +632,28 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "rgba(237,242,234,0.16)",
+    borderColor: colors.panelBorderStrong,
+    backgroundColor: colors.pitch,
     marginRight: -1,
   },
   controlSelected: {
-    backgroundColor: "#d6ff3f",
-    borderColor: "#d6ff3f",
+    backgroundColor: colors.lime,
+    borderColor: colors.lime,
   },
   controlDisabled: {
     opacity: 0.4,
   },
   controlText: {
-    color: "#f3f6f1",
+    color: colors.paper,
+    fontFamily: fonts.uiBold,
     fontSize: 15,
-    fontWeight: "700",
   },
   controlTextSelected: {
-    color: "#12180a",
+    color: colors.ink,
   },
   dateLabel: {
-    color: "#8d988f",
+    color: colors.mist,
+    fontFamily: fonts.ui,
     fontSize: 14,
     letterSpacing: 0.4,
   },
@@ -514,52 +675,59 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "rgba(237,242,234,0.16)",
+    borderColor: colors.panelBorderStrong,
+    backgroundColor: colors.pitch,
   },
   chipSelected: {
-    backgroundColor: "#d6ff3f",
-    borderColor: "#d6ff3f",
+    backgroundColor: colors.lime,
+    borderColor: colors.lime,
   },
   chipText: {
-    color: "#f3f6f1",
+    color: colors.paper,
+    fontFamily: fonts.uiBold,
     fontSize: 14,
-    fontWeight: "700",
   },
   chipTextSelected: {
-    color: "#12180a",
+    color: colors.ink,
   },
   banner: {
     marginHorizontal: 16,
     marginBottom: 10,
     borderWidth: 1,
-    borderColor: "rgba(214,255,63,0.45)",
-    backgroundColor: "rgba(214,255,63,0.08)",
-    color: "#f3f6f1",
+    borderColor: colors.limeEdge,
+    backgroundColor: colors.limeWash,
+    color: colors.paper,
+    fontFamily: fonts.ui,
     padding: 12,
     lineHeight: 20,
+    overflow: "hidden",
   },
   notice: {
     marginHorizontal: 16,
     marginBottom: 10,
-    color: "#e6b35a",
+    color: colors.gold,
+    fontFamily: fonts.uiBold,
   },
   loadingBox: {
     paddingHorizontal: 16,
     gap: 8,
   },
   skeleton: {
-    height: 108,
-    backgroundColor: "#171c19",
+    height: 96,
+    backgroundColor: colors.panel,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.lime,
   },
   errorBox: {
     marginHorizontal: 16,
     borderWidth: 1,
-    borderColor: "rgba(255,176,162,0.5)",
-    backgroundColor: "rgba(255,109,87,0.12)",
+    borderColor: "rgba(255,46,77,0.45)",
+    backgroundColor: colors.sirenWash,
     padding: 14,
   },
   errorText: {
-    color: "#ffb0a2",
+    color: colors.siren,
+    fontFamily: fonts.ui,
     lineHeight: 20,
   },
   retry: {
@@ -567,11 +735,11 @@ const styles = StyleSheet.create({
     minHeight: 44,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#f3f6f1",
+    backgroundColor: colors.paper,
   },
   retryText: {
-    color: "#080a09",
-    fontWeight: "800",
+    color: colors.ink,
+    fontFamily: fonts.uiExtra,
   },
   list: {
     flex: 1,
@@ -581,32 +749,32 @@ const styles = StyleSheet.create({
     paddingBottom: 32,
   },
   league: {
-    color: "#8d988f",
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 1.4,
+    color: colors.mist,
+    fontFamily: fonts.uiBold,
+    fontSize: 11,
+    letterSpacing: 1.6,
     textTransform: "uppercase",
-    marginTop: 8,
-    marginBottom: 8,
+    marginTop: 10,
+    marginBottom: 6,
   },
   match: {
-    backgroundColor: "#121614",
+    backgroundColor: colors.panel,
     borderWidth: 1,
-    borderColor: "rgba(237,242,234,0.12)",
+    borderColor: colors.panelBorder,
     borderLeftWidth: 3,
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 8,
+    paddingVertical: 8,
+    marginBottom: 6,
   },
-  matchLive: { borderLeftColor: "#d6ff3f" },
-  matchScheduled: { borderLeftColor: "#9eb7c8" },
+  matchLive: { borderLeftColor: colors.lime },
+  matchScheduled: { borderLeftColor: colors.mist },
   matchFinished: { borderLeftColor: "transparent" },
-  matchOther: { borderLeftColor: "#e6b35a" },
+  matchOther: { borderLeftColor: colors.gold },
   matchTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 6,
+    marginBottom: 4,
   },
   badge: {
     flexDirection: "row",
@@ -614,85 +782,107 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   badgeLive: {
-    backgroundColor: "#d6ff3f",
+    backgroundColor: colors.lime,
     paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingVertical: 3,
   },
   badgeText: {
-    fontSize: 12,
-    fontWeight: "800",
-    letterSpacing: 0.8,
+    fontFamily: fonts.uiExtra,
+    fontSize: 11,
+    letterSpacing: 1,
   },
-  badgeTextLive: { color: "#12180a" },
-  badgeTextScheduled: { color: "#9eb7c8" },
-  badgeTextFinished: { color: "#8d988f" },
-  badgeTextOther: { color: "#e6b35a" },
+  badgeTextLive: { color: colors.ink },
+  badgeTextScheduled: { color: colors.mist },
+  badgeTextFinished: { color: colors.mist },
+  badgeTextOther: { color: colors.gold },
   kickoff: {
-    color: "#8d988f",
-    fontSize: 13,
+    color: colors.mist,
+    fontFamily: fonts.ui,
+    fontSize: 12,
+  },
+  matchTopRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  starHit: {
+    minWidth: 28,
+    minHeight: 28,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  starGlyph: {
+    color: colors.mist,
+    fontSize: 20,
+    fontWeight: "700",
+  },
+  starGlyphOn: {
+    color: colors.gold,
   },
   teamRow: {
     flexDirection: "row",
     alignItems: "center",
-    minHeight: 40,
+    minHeight: 36,
     gap: 10,
   },
   teamName: {
     flex: 1,
-    color: "#f3f6f1",
-    fontSize: 22,
-    fontWeight: "700",
+    color: colors.paper,
+    fontFamily: fonts.uiBold,
+    fontSize: 18,
   },
   score: {
-    color: "#f3f6f1",
-    fontSize: 32,
-    fontWeight: "800",
-    minWidth: 28,
+    color: colors.paper,
+    fontFamily: fonts.scoreBold,
+    fontSize: 30,
+    minWidth: 30,
     textAlign: "right",
+    letterSpacing: 0.5,
   },
   scorePending: {
-    color: "#8d988f",
+    color: colors.mist,
   },
   logo: {
-    width: 36,
-    height: 36,
+    width: 32,
+    height: 32,
   },
   mark: {
-    width: 36,
-    height: 36,
-    backgroundColor: "#1c231f",
+    width: 32,
+    height: 32,
+    backgroundColor: colors.pitch,
     alignItems: "center",
     justifyContent: "center",
   },
   markText: {
-    color: "#d6ff3f",
-    fontSize: 13,
-    fontWeight: "800",
+    color: colors.lime,
+    fontFamily: fonts.scoreBold,
+    fontSize: 12,
   },
   dot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#12180a",
   },
   dotOnDark: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#d6ff3f",
+    backgroundColor: colors.lime,
+  },
+  dotOnLime: {
+    backgroundColor: colors.ink,
   },
   empty: {
     borderWidth: 1,
     borderStyle: "dashed",
-    borderColor: "rgba(237,242,234,0.16)",
-    color: "#8d988f",
+    borderColor: colors.panelBorderStrong,
+    color: colors.mist,
+    fontFamily: fonts.ui,
     textAlign: "center",
     padding: 28,
   },
   meta: {
-    color: "#8d988f",
-    fontSize: 12,
-    letterSpacing: 0.6,
+    color: colors.mist,
+    fontFamily: fonts.uiBold,
+    fontSize: 11,
+    letterSpacing: 0.8,
     textTransform: "uppercase",
     marginTop: 8,
   },
