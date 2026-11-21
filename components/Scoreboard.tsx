@@ -31,7 +31,7 @@ import { colors, fonts } from "../lib/theme";
 import type { Game, GamesPayload, GameStatus } from "../lib/types";
 
 /** Hits the local Expo routes only. Must stay at least 30 seconds. */
-const POLL_MS = 30_000;
+const POLL_MS = 60_000;
 
 type Mode = "today" | "live";
 
